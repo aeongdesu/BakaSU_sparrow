@@ -14,9 +14,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Install clang-format
+        run: sudo apt-get update && sudo apt-get install -y clang-format-18
+
       - name: Check
         working-directory: kernel
-        run: make check-format
+        run: make check-format CLANG_FORMAT=clang-format-18
 
   rustfmt:
     name: Rustfmt check

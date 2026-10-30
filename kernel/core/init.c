@@ -90,8 +90,6 @@ __attribute__((naked)) int __init kernelsu_init_early(void)
 struct cred *ksu_cred;
 bool ksu_late_loaded;
 
-
-
 // dispatcher of ksu hooks
 #ifdef CONFIG_KSU_TRACEPOINT_HOOK
 #include "hook/syscall_hook_manager.h"
@@ -188,7 +186,6 @@ int __init kernelsu_init(void)
     pr_info("Initialized with driver version: %u, full_version: %s, ABI: %s, Work mode: Built-in, ksu_uapi_version: %d\n", KSU_VERSION, KSU_VERSION_FULL, UTS_MACHINE, KERNEL_SU_UAPI_VERSION);
 #endif
     // clang-format on
-
 
 #ifdef MODULE
     ksu_late_loaded = (current->pid != 1);

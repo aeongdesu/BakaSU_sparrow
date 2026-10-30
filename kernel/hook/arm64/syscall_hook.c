@@ -106,8 +106,7 @@ static int patch_syscall_table(int nr, syscall_fn_t fn)
     if (nr < 0 || nr >= __NR_syscalls)
         return -EINVAL;
 
-    pr_info("patch syscall %d, 0x%lx -> 0x%lx\n", nr, (unsigned long)READ_ONCE(table[nr]),
-            (unsigned long)fn);
+    pr_info("patch syscall %d, 0x%lx -> 0x%lx\n", nr, (unsigned long)READ_ONCE(table[nr]), (unsigned long)fn);
 
     if (ksu_patch_text(&table[nr], &fn, sizeof(fn), KSU_PATCH_TEXT_FLUSH_DCACHE)) {
         pr_err("patch syscall %d failed\n", nr);

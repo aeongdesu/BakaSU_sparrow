@@ -31,11 +31,12 @@ clean:
 check_symbol: tools/check_symbol.c
 	$(CC) tools/check_symbol.c -o check_symbol
 # preinit/runner/nolibc is vendored verbatim, keep it out of formatting
+CLANG_FORMAT ?= clang-format
 FORMAT_FILES = find . -path ./preinit/runner/nolibc -prune -o \( -name "*.c" -o -name "*.h" \) -print0
 
 format:
-	$(FORMAT_FILES) | xargs -0 clang-format -i
+	$(FORMAT_FILES) | xargs -0 $(CLANG_FORMAT) -i
 check-format:
-	$(FORMAT_FILES) | xargs -0 clang-format --dry-run --Werror
+	$(FORMAT_FILES) | xargs -0 $(CLANG_FORMAT) --dry-run --Werror
 
 # Keep a new line here!! Because someone may append config
