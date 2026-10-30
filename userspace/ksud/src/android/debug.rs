@@ -52,7 +52,7 @@ pub fn set_manager(pkg: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn insmod(module: &Path, params: &[String]) -> Result<()> {
+pub fn insmod(module: &Path, params: &[String], run_stages: bool) -> Result<()> {
     // KSU_IOCTL_LOOKUP_SYMBOLS was introduced in UAPI v6. Prefer resolving the
     // module's undefined (non-exported) symbols through it; older kernels, or a
     // failed lookup, fall back to /proc/kallsyms.
@@ -79,6 +79,36 @@ pub fn insmod(module: &Path, params: &[String]) -> Result<()> {
     .with_context(|| format!("load module failed: {}", module.display()))?;
 
     println!("Loaded kernel module: {}", module.display());
+
+    /* Late load grants this process u:r:ksu:s0; run the stages here. */
+    if run_stages {
+        use crate::android::init_event;
+
+        ksucalls::reset_cache();
+
+        /* A second post-fs-data would start another zygiskd. */
+        let boot_id = std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+            .map(|value| value.trim().to_string())
+            .unwrap_or_default();
+        let marker = std::path::Path::new("/data/adb/.ghostlock_stage_boot");
+        if !boot_id.is_empty()
+            && std::fs::read_to_string(marker)
+                .map(|value| value.trim() == boot_id)
+                .unwrap_or(false)
+        {
+            println!("Module stages already ran this boot");
+            return Ok(());
+        }
+
+        println!("Running module stages");
+        init_event::on_post_fs_data().context("post-fs-data stage failed")?;
+        init_event::on_services();
+        init_event::on_boot_completed();
+        if !boot_id.is_empty() {
+            let _ = std::fs::write(marker, boot_id);
+        }
+        println!("Module stages complete");
+    }
     Ok(())
 }
 

@@ -90,6 +90,8 @@ __attribute__((naked)) int __init kernelsu_init_early(void)
 struct cred *ksu_cred;
 bool ksu_late_loaded;
 
+
+
 // dispatcher of ksu hooks
 #ifdef CONFIG_KSU_TRACEPOINT_HOOK
 #include "hook/syscall_hook_manager.h"
@@ -105,7 +107,7 @@ bool ksu_late_loaded;
 static inline void __init ksu_hook_init(void)
 {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
-    ksu_lsm_hook_magic_init();
+    /* sparrow: the broad BakaSU LSM magic hook destabilises file opens. */
 #endif
 
 #if defined(CONFIG_KSU_TRACEPOINT_HOOK)
@@ -129,7 +131,7 @@ static inline void __init ksu_hook_init(void)
 static inline void __exit ksu_hook_exit(void)
 {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
-    ksu_lsm_hook_magic_exit();
+    /* sparrow: LSM magic init skipped. */
 #endif
 
 #if defined(CONFIG_KSU_TRACEPOINT_HOOK)
@@ -143,11 +145,11 @@ static inline void __exit ksu_hook_exit(void)
 void setup_ksu_cred(void)
 {
     setup_ksu_cred_selinux();
-    if (init_session_keyring == NULL) {
-        init_session_keyring = ksu_get_session_keyring(current_cred());
-    }
-
-    setup_ksu_cred_session_keyring();
+    /*
+     * sparrow: current_cred() here is the Stage 4 synthetic cred.  Reading
+     * cred->session_keyring faults on this vendor kernel, so do not install
+     * the init session keyring.  It is not needed for su/manager operation.
+     */
 }
 
 #ifdef CONFIG_KSU_DEBUG
@@ -186,6 +188,7 @@ int __init kernelsu_init(void)
     pr_info("Initialized with driver version: %u, full_version: %s, ABI: %s, Work mode: Built-in, ksu_uapi_version: %d\n", KSU_VERSION, KSU_VERSION_FULL, UTS_MACHINE, KERNEL_SU_UAPI_VERSION);
 #endif
     // clang-format on
+
 
 #ifdef MODULE
     ksu_late_loaded = (current->pid != 1);
@@ -268,11 +271,11 @@ int __init kernelsu_init(void)
         ksu_hook_init();
 
         ksu_throne_tracker_init();
-        ksu_observer_init();
+        /* ksu_observer_init() hangs on this vendor kernel. */
         ksu_file_wrapper_init();
 
         ksu_boot_completed = true;
-        track_throne(TRACK_THRONE_FORCE_SYNCHRONOUS);
+        /* sparrow: track_throne crashes on the synthetic late-load cred. */
 
         ksu_feature_apply_forced();
 

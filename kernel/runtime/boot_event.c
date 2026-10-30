@@ -27,7 +27,7 @@ void on_post_fs_data(void)
     pr_info("on_post_fs_data!\n");
 
     ksu_load_allow_list();
-    ksu_observer_init();
+    /* ksu_observer_init() hangs on this vendor kernel (fsnotify group setup). */
     // sanity check, this may influence the performance
     ksu_stop_input_hook_runtime();
     ksu_selinux_hide_handle_post_fs_data();
@@ -37,7 +37,8 @@ void on_post_fs_data(void)
 
     // scan manager
     pr_info("post-fs-data triggered, scanning manager...");
-    track_throne(0);
+    /* sparrow: track_throne crashes on the late-load synthetic cred. */
+    pr_info("post-fs-data: track_throne skipped on sparrow\n");
 }
 
 #if defined(CONFIG_EXT4_FS) && (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 4, 0) || defined(KSU_HAS_MODERN_EXT4))

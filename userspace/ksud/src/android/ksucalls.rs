@@ -1,7 +1,7 @@
 #![allow(clippy::unreadable_literal)]
 use anyhow::{Result, bail};
 
-use std::{cell::Cell, fs, io, os::fd::RawFd, sync::OnceLock};
+use std::{cell::Cell, fs, io, os::fd::RawFd};
 
 use crate::{android::uapi, defs::MountInfo};
 
@@ -82,9 +82,9 @@ pub fn setup_sigsys_handler() {
 const DRIVER_FD_NAME: &str = "anon_inode:[ksu_driver]";
 const SU_DRIVER_FD_NAME: &str = "anon_inode:[ksu_driver_su]";
 
-// Global driver fd cache
-static DRIVER_FD: OnceLock<RawFd> = OnceLock::new();
-static INFO_CACHE: OnceLock<uapi::ksu_get_info_cmd> = OnceLock::new();
+// Resettable: insmod must drop the pre-load negative result.
+static DRIVER_FD: std::sync::Mutex<Option<RawFd>> = std::sync::Mutex::new(None);
+static INFO_CACHE: std::sync::Mutex<Option<uapi::ksu_get_info_cmd>> = std::sync::Mutex::new(None);
 
 fn scan_driver_fd() -> io::Result<Option<RawFd>> {
     let fd_dir = fs::read_dir("/proc/self/fd")?;
@@ -109,12 +109,25 @@ fn scan_driver_fd() -> io::Result<Option<RawFd>> {
 }
 
 pub fn claim_inherited_driver_fd() -> io::Result<()> {
-    if DRIVER_FD.get().is_none()
+    let mut slot = DRIVER_FD
+        .lock()
+        .map_err(|_| io::Error::other("driver fd lock poisoned"))?;
+    if slot.is_none()
         && let Some(fd) = scan_driver_fd()?
     {
-        let _ = DRIVER_FD.set(fd);
+        *slot = Some(fd);
     }
     Ok(())
+}
+
+/// Drops cached driver state after insmod.
+pub fn reset_cache() {
+    if let Ok(mut fd) = DRIVER_FD.lock() {
+        *fd = None;
+    }
+    if let Ok(mut info) = INFO_CACHE.lock() {
+        *info = None;
+    }
 }
 
 // Get cached driver fd
@@ -143,7 +156,15 @@ fn init_driver_fd() -> Option<RawFd> {
 
 // ioctl wrapper using libc
 fn ksuctl<T>(request: u32, arg: *mut T) -> Result<i32> {
-    let fd = *DRIVER_FD.get_or_init(|| init_driver_fd().unwrap_or(-1));
+    let fd = {
+        let mut slot = DRIVER_FD
+            .lock()
+            .map_err(|_| anyhow::anyhow!("driver fd lock poisoned"))?;
+        if slot.is_none() {
+            *slot = init_driver_fd();
+        }
+        slot.unwrap_or(-1)
+    };
     if fd < 0 {
         bail!("could not retrieve kernelsu driver fd")
     }
@@ -158,19 +179,31 @@ fn ksuctl<T>(request: u32, arg: *mut T) -> Result<i32> {
 
 // API implementations
 pub fn get_info() -> uapi::ksu_get_info_cmd {
-    *INFO_CACHE.get_or_init(|| {
-        let mut cmd = uapi::ksu_get_info_cmd {
-            version: 0,
-            flags: 0,
-            features: 0,
-            uapi_version: 0,
-        };
-
-        if ksuctl(uapi::KSU_IOCTL_GET_INFO, &raw mut cmd).is_err() {
-            let _ = ksuctl(uapi::KSU_IOCTL_GET_INFO_LEGACY, &raw mut cmd);
+    let mut slot = match INFO_CACHE.lock() {
+        Ok(slot) => slot,
+        Err(_) => {
+            return uapi::ksu_get_info_cmd {
+                version: 0,
+                flags: 0,
+                features: 0,
+                uapi_version: 0,
+            };
         }
-        cmd
-    })
+    };
+    if let Some(info) = *slot {
+        return info;
+    }
+    let mut cmd = uapi::ksu_get_info_cmd {
+        version: 0,
+        flags: 0,
+        features: 0,
+        uapi_version: 0,
+    };
+    if ksuctl(uapi::KSU_IOCTL_GET_INFO, &raw mut cmd).is_err() {
+        let _ = ksuctl(uapi::KSU_IOCTL_GET_INFO_LEGACY, &raw mut cmd);
+    }
+    *slot = Some(cmd);
+    cmd
 }
 
 pub fn get_version() -> i32 {

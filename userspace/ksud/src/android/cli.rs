@@ -97,6 +97,9 @@ enum Commands {
         /// module load parameters (e.g. key=val key2=val2)
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 0..)]
         params: Vec<String>,
+        /// Run post-fs-data, service, and boot-completed stages after loading
+        #[arg(long)]
+        run_stages: bool,
     },
 
     /// Install KernelSU userspace component to system
@@ -629,7 +632,11 @@ pub fn run() -> Result<()> {
             UmountConfigOp::List => umount_config::list_umount(),
         },
         Commands::SoftReboot => crate::android::soft_reboot::soft_reboot(),
-        Commands::Insmod { module, params } => debug::insmod(&module, &params),
+        Commands::Insmod {
+            module,
+            params,
+            run_stages,
+        } => debug::insmod(&module, &params, run_stages),
         Commands::Module { command } => {
             utils::switch_mnt_ns(1)?;
             match command {

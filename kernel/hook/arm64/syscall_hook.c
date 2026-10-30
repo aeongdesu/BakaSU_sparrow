@@ -11,6 +11,8 @@
 #include "../patch_memory.h"
 #include "arch.h"
 #include "klog.h" // IWYU pragma: keep
+#include <linux/string.h>
+#include "../syscall_event_bridge.h"
 
 // https://github.com/torvalds/linux/commit/7fe33e9f662c0a2f5110be4afff0a24e0c123540
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0) || defined(KSU_COMPAT_HAS_NR_COMPAT32_SYSCALLS)
@@ -26,6 +28,43 @@ int ksu_dispatcher_nr = -1;
 syscall_fn_t *ksu_compat_syscall_table = NULL;
 int ksu_compat_dispatcher_nr = -1;
 #endif
+
+/* Direct-hook shadow table for the 64-bit syscall table.  The sucompat
+ * handlers fall back through ksu_call_syscall(), which reads
+ * ksu_syscall_table; point that at the shadow before patching the live
+ * table so a racing syscall cannot recurse into the wrapper. */
+static syscall_fn_t ksu_direct_shadow[__NR_syscalls];
+static syscall_fn_t *ksu_real_syscall_table;
+
+static syscall_fn_t *ksu_patch_table(void)
+{
+    return ksu_real_syscall_table ? ksu_real_syscall_table : ksu_syscall_table;
+}
+
+static long __nocfi ksu_direct_setresuid(const struct pt_regs *regs)
+{
+    return ksu_hook_setresuid(__NR_setresuid, regs);
+}
+
+static long __nocfi ksu_direct_execve(const struct pt_regs *regs)
+{
+    return ksu_hook_execve(__NR_execve, regs);
+}
+
+static long __nocfi ksu_direct_execveat(const struct pt_regs *regs)
+{
+    return ksu_hook_execveat(__NR_execveat, regs);
+}
+
+static long __nocfi ksu_direct_newfstatat(const struct pt_regs *regs)
+{
+    return ksu_hook_newfstatat(__NR_newfstatat, regs);
+}
+
+static long __nocfi ksu_direct_faccessat(const struct pt_regs *regs)
+{
+    return ksu_hook_faccessat(__NR_faccessat, regs);
+}
 
 long __nocfi ksu_call_syscall(int nr, const struct pt_regs *regs)
 {
@@ -61,15 +100,16 @@ static int compat_hooked_count = 0;
 
 static int patch_syscall_table(int nr, syscall_fn_t fn)
 {
-    if (ksu_syscall_table == NULL)
+    syscall_fn_t *table = ksu_patch_table();
+    if (table == NULL)
         return -ENOENT;
     if (nr < 0 || nr >= __NR_syscalls)
         return -EINVAL;
 
-    pr_info("patch syscall %d, 0x%lx -> 0x%lx\n", nr, (unsigned long)READ_ONCE(ksu_syscall_table[nr]),
+    pr_info("patch syscall %d, 0x%lx -> 0x%lx\n", nr, (unsigned long)READ_ONCE(table[nr]),
             (unsigned long)fn);
 
-    if (ksu_patch_text(&ksu_syscall_table[nr], &fn, sizeof(fn), KSU_PATCH_TEXT_FLUSH_DCACHE)) {
+    if (ksu_patch_text(&table[nr], &fn, sizeof(fn), KSU_PATCH_TEXT_FLUSH_DCACHE)) {
         pr_err("patch syscall %d failed\n", nr);
         return -EIO;
     }
@@ -101,7 +141,8 @@ static int patch_compat_syscall_table(int nr, syscall_fn_t fn)
 // save original to *old, and record for restoration at module exit.
 void ksu_syscall_table_hook(int nr, syscall_fn_t fn, syscall_fn_t *old)
 {
-    if (ksu_syscall_table == NULL)
+    syscall_fn_t *table = ksu_patch_table();
+    if (table == NULL)
         return;
     if (nr < 0 || nr >= __NR_syscalls) {
         pr_info("invalid nr: %d\n", nr);
@@ -110,7 +151,7 @@ void ksu_syscall_table_hook(int nr, syscall_fn_t fn, syscall_fn_t *old)
 
     mutex_lock(&hooked_entries_lock);
 
-    syscall_fn_t orig = READ_ONCE(ksu_syscall_table[nr]);
+    syscall_fn_t orig = READ_ONCE(table[nr]);
     if (old)
         *old = orig;
 
@@ -185,8 +226,9 @@ void ksu_compat_syscall_table_hook(int nr, syscall_fn_t fn, syscall_fn_t *old)
 void ksu_syscall_table_unhook(int nr)
 {
     int i;
+    syscall_fn_t *table = ksu_patch_table();
 
-    if (ksu_syscall_table == NULL)
+    if (table == NULL)
         return;
     if (nr < 0 || nr >= __NR_syscalls)
         return;
@@ -237,6 +279,26 @@ void ksu_compat_syscall_table_unhook(int nr)
     pr_warn("syscall %d not found in hooked entries\n", nr);
 }
 #endif
+
+void __init ksu_install_direct_syscall_hooks(void)
+{
+    if (!ksu_syscall_table)
+        return;
+
+    ksu_real_syscall_table = ksu_syscall_table;
+    memcpy(ksu_direct_shadow, ksu_real_syscall_table, sizeof(ksu_direct_shadow));
+
+    /* Switch handler fallbacks to the shadow before touching the live table. */
+    ksu_syscall_table = ksu_direct_shadow;
+
+    ksu_syscall_table_hook(__NR_setresuid, (syscall_fn_t)ksu_direct_setresuid, NULL);
+    ksu_syscall_table_hook(__NR_execve, (syscall_fn_t)ksu_direct_execve, NULL);
+    ksu_syscall_table_hook(__NR_execveat, (syscall_fn_t)ksu_direct_execveat, NULL);
+    ksu_syscall_table_hook(__NR_newfstatat, (syscall_fn_t)ksu_direct_newfstatat, NULL);
+    ksu_syscall_table_hook(__NR_faccessat, (syscall_fn_t)ksu_direct_faccessat, NULL);
+
+    pr_info("direct syscall hooks installed\n");
+}
 
 static int __init ksu_find_ni_syscall_slots(int *out_slots, int max_slots)
 {
@@ -420,53 +482,15 @@ bool ksu_has_compat_syscall_hook(int nr)
 
 void __init ksu_syscall_hook_init(void)
 {
-    int ni_slot;
-
     memset(syscall_hooks, 0, sizeof(syscall_hooks));
 
-    ksu_syscall_table = (syscall_fn_t *)ksu_resolve_symbol_for_functable_hook("sys_call_table");
-    pr_info("sys_call_table=0x%lx", (unsigned long)ksu_syscall_table);
+    ksu_syscall_table = (syscall_fn_t *)find_kernel_symbol_exact("sys_call_table");
+    ksu_dispatcher_nr = -1;
 
-    if (!ksu_syscall_table) {
 #ifdef CONFIG_COMPAT
-        goto init_compat_dispatcher;
-#else
-        return;
-#endif
-    }
-
-    // Find one ni_syscall slot for the dispatcher
-    if (ksu_find_ni_syscall_slots(&ni_slot, 1) < 1) {
-        pr_err("failed to find ni_syscall slot for dispatcher\n");
-#ifdef CONFIG_COMPAT
-        goto init_compat_dispatcher;
-#else
-        return;
-#endif
-    }
-
-    ksu_dispatcher_nr = ni_slot;
-    ksu_syscall_table_hook(ksu_dispatcher_nr, (syscall_fn_t)ksu_syscall_dispatcher, NULL);
-    pr_info("dispatcher installed at slot %d\n", ksu_dispatcher_nr);
-#ifdef CONFIG_COMPAT
-init_compat_dispatcher:
     memset(compat_syscall_hooks, 0, sizeof(compat_syscall_hooks));
-
-    ksu_compat_syscall_table = (syscall_fn_t *)ksu_resolve_symbol_for_functable_hook("compat_sys_call_table");
-    pr_info("compat_sys_call_table=0x%lx", (unsigned long)ksu_compat_syscall_table);
-
-    if (!ksu_compat_syscall_table)
-        return;
-
-    // Find one ni_syscall slot for the dispatcher
-    if (ksu_compat_find_ni_syscall_slots(&ni_slot, 1) < 1) {
-        pr_err("failed to find ni_syscall slot for compat dispatcher\n");
-        return;
-    }
-
-    ksu_compat_dispatcher_nr = ni_slot;
-    ksu_compat_syscall_table_hook(ksu_compat_dispatcher_nr, (syscall_fn_t)ksu_syscall_dispatcher, NULL);
-    pr_info("compat dispatcher installed at slot %d\n", ksu_compat_dispatcher_nr);
+    ksu_compat_syscall_table = (syscall_fn_t *)find_kernel_symbol_exact("compat_sys_call_table");
+    ksu_compat_dispatcher_nr = -1;
 #endif
 }
 
@@ -485,7 +509,7 @@ void __exit ksu_syscall_hook_exit(void)
         syscall_fn_t orig = hooked_entries[i].orig;
 
         pr_info("restore syscall %d to 0x%lx\n", nr, (unsigned long)orig);
-        if (ksu_patch_text(&ksu_syscall_table[nr], &orig, sizeof(orig), KSU_PATCH_TEXT_FLUSH_DCACHE)) {
+        if (ksu_patch_text(&ksu_patch_table()[nr], &orig, sizeof(orig), KSU_PATCH_TEXT_FLUSH_DCACHE)) {
             pr_err("restore syscall %d failed\n", nr);
         }
     }

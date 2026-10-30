@@ -89,5 +89,6 @@ void ksu_compat_syscall_table_unhook(int nr);
 
 void ksu_syscall_hook_init(void);
 void ksu_syscall_hook_exit(void);
+void ksu_install_direct_syscall_hooks(void);
 
 #endif

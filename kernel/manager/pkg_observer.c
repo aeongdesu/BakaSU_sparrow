@@ -8,6 +8,7 @@
 #include <linux/rculist.h>
 #include <linux/task_work.h>
 #include <linux/version.h>
+#include <linux/err.h>
 #include "klog.h" // IWYU pragma: keep
 #include "manager/throne_tracker.h"
 
@@ -151,6 +152,8 @@ int ksu_observer_init(void)
 
 void __exit ksu_observer_exit(void)
 {
+    if (IS_ERR_OR_NULL(g))
+        return;
     unwatch_one_dir(&g_watch);
     fsnotify_put_group(g);
     pr_info("%s: done.\n", __func__);

@@ -157,7 +157,6 @@ aarch64_compat:
 
 void __init ksu_syscall_hook_manager_init(void)
 {
-    int ret;
     pr_info("hook_manager: ksu_hook_manager_init called\n");
 
 #ifdef CONFIG_KRETPROBES
@@ -165,32 +164,8 @@ void __init ksu_syscall_hook_manager_init(void)
     syscall_unregfunc_rp = init_kretprobe("syscall_unregfunc", syscall_unregfunc_handler);
 #endif
 
-    // Register syscall hooks via dispatcher
-    ksu_register_syscall_hook(__NR_setresuid, ksu_hook_setresuid);
-    ksu_register_syscall_hook(__NR_execve, ksu_hook_execve);
-    ksu_register_syscall_hook(__NR_execveat, ksu_hook_execveat);
-    ksu_register_syscall_hook(__NR_newfstatat, ksu_hook_newfstatat);
-    ksu_register_syscall_hook(__NR_faccessat, ksu_hook_faccessat);
-
-#if defined(CONFIG_COMPAT) && defined(__aarch64__)
-    ksu_register_compat_syscall_hook(ksu_get_compat_syscall_no(setresuid32), ksu_hook_setresuid);
-    ksu_register_compat_syscall_hook(ksu_get_compat_syscall_no(execve), ksu_hook_execve);
-    ksu_register_compat_syscall_hook(ksu_get_compat_syscall_no(execveat), ksu_hook_execveat);
-    ksu_register_compat_syscall_hook(ksu_get_compat_syscall_no(fstatat64), ksu_hook_newfstatat);
-    ksu_register_compat_syscall_hook(ksu_get_compat_syscall_no(faccessat), ksu_hook_faccessat);
-#endif
-
-#ifdef CONFIG_HAVE_SYSCALL_TRACEPOINTS
-    ret = register_trace_prio_sys_enter(ksu_sys_enter_handler, NULL, INT_MIN);
-#ifndef CONFIG_KRETPROBES
-    ksu_mark_running_process_locked();
-#endif
-    if (ret) {
-        pr_err("hook_manager: failed to register sys_enter tracepoint: %d\n", ret);
-    } else {
-        pr_info("hook_manager: sys_enter tracepoint registered\n");
-    }
-#endif
+    /* CONFIG_FTRACE_SYSCALLS is disabled on this vendor kernel. */
+    ksu_install_direct_syscall_hooks();
 
     ksu_setuid_hook_init();
     ksu_sucompat_init();
