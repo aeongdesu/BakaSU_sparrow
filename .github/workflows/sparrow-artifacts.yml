@@ -207,11 +207,12 @@ jobs:
 
       - name: Read build version
         id: ver
+        env:
+          GITHUB_SHA: ${{ github.sha }}
         run: |
           MODVER=$(modinfo -F vermagic dist/bakasu-sparrow-targetcfg.ko | awk '{print $1}')
-          SHA=$(git rev-parse --short=8 HEAD)
           echo "modver=$MODVER" >> "$GITHUB_OUTPUT"
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "sha=${GITHUB_SHA:0:8}" >> "$GITHUB_OUTPUT"
 
       - uses: softprops/action-gh-release@v3
         with:
