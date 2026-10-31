@@ -97,12 +97,11 @@ if grep -q CONFIG_STACKPROTECTOR_PER_TASK "$KDIR/include/generated/autoconf.h"; 
 fi
 
 log "building kernelsu.ko"
-# -ffile-prefix-map keeps __FILE__ out of the output, so the same source builds
-# to the same bytes regardless of where it is checked out.
 make -C "$KDIR" M="$SRC" src="$SRC" modules \
     CONFIG_KSU=m \
     CONFIG_KSU_MULTI_MANAGER_SUPPORT=y \
     CONFIG_KSU_TRACEPOINT_HOOK=y \
+    CONFIG_KSU_FULL_NAME_FORMAT='"v%KSU_VERSION%@%REPO_NAME%"' \
     KCFLAGS="-ffile-prefix-map=$PREFIX_MAP=."
 
 KO="$SRC/kernelsu.ko"
