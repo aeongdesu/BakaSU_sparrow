@@ -25,3 +25,6 @@ ksu_uapi.h
 .clangd
 out
 preinit/runner.elf
+**/*.tsv
+.lkm-work/
+__pycache__/
