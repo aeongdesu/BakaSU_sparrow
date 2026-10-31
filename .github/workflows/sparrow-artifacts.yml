@@ -40,6 +40,12 @@ jobs:
       - name: Mark workspace safe for git
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
+      - name: Cache kernel tree
+        uses: actions/cache@v6
+        with:
+          path: .lkm-work/kernel
+          key: kdir-5.10.198-${{ runner.os }}
+
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -103,6 +109,15 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ksud-${{ runner.os }}-${{ hashFiles('userspace/ksud/Cargo.lock') }}
+          restore-keys: ksud-${{ runner.os }}-
+
       - uses: actions/download-artifact@v8
         with:
           name: lkm
@@ -139,6 +154,10 @@ jobs:
           rustup default nightly
           rustup component add rust-src
           NDK="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          SYSROOT="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          export BINDGEN_EXTRA_CLANG_ARGS="--target=aarch64-linux-android26 \
+            --sysroot=$SYSROOT -I$SYSROOT/usr/include \
+            -I$SYSROOT/usr/include/aarch64-linux-android"
           "$NDK/clang" --target=aarch64-linux-gnu -c -nostdlib \
             -o userspace/ksud/.lkm_image_bootstrap.o \
             userspace/ksud/src/lkm_image_bootstrap.S
@@ -165,6 +184,8 @@ jobs:
     if: ${{ github.ref_type == 'tag' || inputs.publish == true }}
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/download-artifact@v8
         with:
@@ -178,6 +199,15 @@ jobs:
           ls -l
           sha256sum ksud bakasu-sparrow-targetcfg.ko > sha256sum.txt
           cat sha256sum.txt
+
+      - id: attest
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-checksums: dist/sha256sum.txt
+          push-to-registry: false
+
+      - name: Keep attestation bundle with the release
+        run: cp "${{ steps.attest.outputs.bundle-path }}" dist/
 
       - uses: softprops/action-gh-release@v3
         with:
@@ -193,5 +223,6 @@ jobs:
             dist/ksud
             dist/bakasu-sparrow-targetcfg.ko
             dist/sha256sum.txt
+            dist/attestation.json
           fail_on_unmatched_files: true
           prerelease: ${{ github.ref_type != 'tag' }}
