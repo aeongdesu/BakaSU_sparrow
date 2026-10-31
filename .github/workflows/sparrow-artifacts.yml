@@ -68,24 +68,25 @@ jobs:
           KO=dist/kernelsu.ko
           modinfo "$KO" | grep -E '^(name|vermagic):'
           test "$(modinfo -F name "$KO")" = kernelsu
+          test "$(modinfo -F vermagic "$KO" | awk '{print $1}')" = \
+            5.10.198-perf-gaaf872b28b70-ab117
+          # __versions must be empty or the loader rejects the module.
           test "$(readelf -S -W "$KO" | awk '/__versions/{print $6}')" = "000000"
+          # The direct syscall hooks are the whole point of this build.
           for f in setresuid execve execveat newfstatat faccessat; do
             nm "$KO" | grep -q "ksu_direct_$f$" || {
               echo "missing ksu_direct_$f" >&2; exit 1; }
           done
-          # Drop the build-id note: it hashes link inputs, so keeping it would
-          # make the artifact hash differ per runner.
+          # A DDK/GKI build would have the wrong task_struct offsets; the
+          # device offsets are only correct when TSK_STACK_CANARY is 1744.
+          test "$(awk '{if ($2 == "TSK_STACK_CANARY") print $3;}' \
+                 .lkm-work/kernel/include/generated/asm-offsets.h)" = 1744
           llvm-strip -d -R .note.gnu.build-id -o dist/stripped.ko "$KO"
           mv dist/stripped.ko dist/bakasu-sparrow-targetcfg.ko
+          # The version code comes from the git commit count, so this hash
+          # changes with every commit and cannot be pinned here.  Consumers pin
+          # the hash published in the release's sha256sum.txt.
           sha256sum dist/bakasu-sparrow-targetcfg.ko
-          # A toolchain change must fail here, not silently ship a different
-          # module.  kernel/kheaders/build-lkm.sh produces this hash.
-          EXPECTED=97657664236908658859fbb7e87326f94a3bd525a8ddaa1c7edf1d094471b029
-          ACTUAL=$(sha256sum dist/bakasu-sparrow-targetcfg.ko | cut -d' ' -f1)
-          if [ "$ACTUAL" != "$EXPECTED" ]; then
-            echo "module hash $ACTUAL != pinned $EXPECTED" >&2
-            exit 1
-          fi
 
       - uses: actions/upload-artifact@v7
         with:
